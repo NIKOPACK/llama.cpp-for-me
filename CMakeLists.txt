@@ -7,6 +7,30 @@ set(CMAKE_WARN_UNUSED_CLI YES)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# macOS defaults and quality-of-life tweaks
+if (APPLE)
+    # Prefer Apple Silicon when running on arm64, but allow user override via CMAKE_OSX_ARCHITECTURES
+    if (NOT CMAKE_OSX_ARCHITECTURES)
+        if (CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+            set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Target architectures for macOS build" FORCE)
+        endif()
+    endif()
+
+    # Set a conservative, broadly compatible default deployment target (user can override)
+    if (NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        # macOS 11.0 is the first version with native Apple Silicon support
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version to target" FORCE)
+    endif()
+
+    # Ensure installed executables can locate libllama without DYLD_LIBRARY_PATH fiddling
+    set(CMAKE_MACOSX_RPATH ON)
+    set(CMAKE_INSTALL_RPATH "@loader_path/../lib;@loader_path")
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+
+    message(STATUS "macOS: arch=${CMAKE_OSX_ARCHITECTURES} min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
