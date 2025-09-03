@@ -7,7 +7,7 @@
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers] [-n n_predict]\n", argv[0]);
     printf("\n");
 }
 
@@ -15,6 +15,7 @@ int main(int argc, char ** argv) {
     std::string model_path;
     int ngl = 99;
     int n_ctx = 2048;
+    int n_predict = 256;
 
     // parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -36,6 +37,13 @@ int main(int argc, char ** argv) {
             } else if (strcmp(argv[i], "-ngl") == 0) {
                 if (i + 1 < argc) {
                     ngl = std::stoi(argv[++i]);
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "-n") == 0) {
+                if (i + 1 < argc) {
+                    n_predict = std::stoi(argv[++i]);
                 } else {
                     print_usage(argc, argv);
                     return 1;
@@ -90,8 +98,11 @@ int main(int argc, char ** argv) {
 
     // initialize the sampler
     llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(smpl, llama_sampler_init_min_p(0.05f, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.8f));
+    // 更保守的默认值以减少循环：
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));        // top-k
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.95f, 1));  // top-p
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(/*last_n*/ 128, /*repeat*/ 1.20f, /*freq*/ 0.10f, /*present*/ 0.10f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));       // 温度
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     // helper function to evaluate a prompt and generate a response
@@ -108,9 +119,13 @@ int main(int argc, char ** argv) {
         }
 
         // prepare a batch for the prompt
-        llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
-        llama_token new_token_id;
-        while (true) {
+    llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+    llama_token new_token_id;
+    llama_token last_token_id = -1;
+    int same_token_count = 0;
+    int anomaly_count = 0; // 检测异常字符计数
+    int n_decoded = 0;
+    while (true) {
             // check if we have enough space in the context to evaluate this batch
             int n_ctx = llama_n_ctx(ctx);
             int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
@@ -127,9 +142,15 @@ int main(int argc, char ** argv) {
 
             // sample the next token
             new_token_id = llama_sampler_sample(smpl, ctx, -1);
+            if (new_token_id == last_token_id) {
+                same_token_count++;
+            } else {
+                same_token_count = 1;
+                last_token_id = new_token_id;
+            }
 
-            // is it an end of generation?
-            if (llama_vocab_is_eog(vocab, new_token_id)) {
+            // is it an end of generation or max tokens reached?
+            if (llama_vocab_is_eog(vocab, new_token_id) || n_decoded >= n_predict || same_token_count >= 32) {
                 break;
             }
 
@@ -140,16 +161,48 @@ int main(int argc, char ** argv) {
                 GGML_ABORT("failed to convert token to piece\n");
             }
             std::string piece(buf, n);
+            
+            // 检测异常输出模式（连续的圆括号、@符号等）
+            if (piece.length() == 1) {
+                char ch = piece[0];
+                if (ch == '(' || ch == ')' || ch == '@') {
+                    anomaly_count++;
+                } else {
+                    anomaly_count = 0;
+                }
+            } else if (piece == "ó" || piece == "gó") {
+                anomaly_count++;
+            } else {
+                anomaly_count = 0;
+            }
+            
+            // 如果检测到太多异常字符，停止生成
+            if (anomaly_count >= 10) {
+                printf("\n\n🚨 [模型质量警告] 🚨\n");
+                printf("检测到模型输出异常字符。这通常表明:\n");
+                printf("• 模型文件可能损坏或质量不佳\n");
+                printf("• 建议尝试其他GGUF模型文件\n");
+                printf("• 或者检查模型是否与llama.cpp兼容\n\n");
+                break;
+            }
+            
             printf("%s", piece.c_str());
             fflush(stdout);
             response += piece;
 
             // prepare the next batch with the sampled token
             batch = llama_batch_get_one(&new_token_id, 1);
+            n_decoded++;
         }
 
         return response;
     };
+
+    printf("\n=== llama.cpp 简单聊天示例 ===\n");
+    printf("Metal GPU 加速: %s\n", ngl > 0 ? "启用" : "禁用");
+    printf("模型: %s\n", model_path.c_str());
+    printf("输入您的消息，按回车发送。空行退出。\n");
+    printf("注意: 如果模型输出异常，程序会自动检测并提示。\n\n");
 
     std::vector<llama_chat_message> messages;
     std::vector<char> formatted(llama_n_ctx(ctx));

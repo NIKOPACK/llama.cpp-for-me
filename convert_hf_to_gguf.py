@@ -3657,6 +3657,15 @@ class Qwen3Model(Qwen2Model):
         hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Some community Qwen3 checkpoints include extra quantization-related tensors
+        # (e.g., "*.biases", "*.scales") which are not part of GGUF. Safely skip them.
+        # Examples observed: 'model.embed_tokens.biases', 'model.embed_tokens.scales'
+        if name.endswith((".biases", ".scales")):
+            logger.warning(f"Skipping non-standard tensor {name!r}")
+            return []
+        return super().modify_tensors(data_torch, name, bid)
+
     def set_vocab(self):
         # deal with intern-s1-mini
         if self.origin_hf_arch == 'InternS1ForConditionalGeneration':
