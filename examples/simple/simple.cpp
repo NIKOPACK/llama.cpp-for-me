@@ -1,10 +1,9 @@
-#include "llama.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
-
-static void print_usage(int, char ** argv) {
+#include "llama.h"
+static void print_usage([[maybe_unused]] int argc, char ** argv) {
     printf("\nexample usage:\n");
     printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [prompt]\n", argv[0]);
     printf("\n");
@@ -12,6 +11,7 @@ static void print_usage(int, char ** argv) {
 
 int main(int argc, char ** argv) {
     // path to the model gguf file
+    // provide via -m <model.gguf>; leave empty by default
     std::string model_path;
     // prompt to generate text from
     std::string prompt = "Hello my name is";
